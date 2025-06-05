@@ -1,9 +1,8 @@
-```markdown
-# 📒 05 – ABI & Registers
+#  05 – ABI & Registers
 ## ✅ Objective
 Understand the 32 RISC-V general-purpose registers, their ABI names, and roles in the calling convention.
 
-### Register Table
+## Register Table
 
 | Register | ABI Name | Role / Description                          |
 |----------|----------|---------------------------------------------|
@@ -40,9 +39,8 @@ Understand the 32 RISC-V general-purpose registers, their ABI names, and roles i
 | x30      | t5       | Temporary (caller-saved)                    |
 | x31      | t6       | Temporary (caller-saved)                    |
 
----
 
-### 🔁 RISC-V Calling Convention Summary
+## 🔁 RISC-V Calling Convention Summary
 
 - **a0–a7 (x10–x17)**: Function arguments and return values (**caller-saved**)
 - **s0–s11 (x8–x9, x18–x27)**: Saved registers (**callee-saved**)
