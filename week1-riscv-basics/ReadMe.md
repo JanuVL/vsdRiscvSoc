@@ -38,73 +38,35 @@ riscv-none-elf-gdb --version
 # 02 - Bare-Metal "Hello, World!"
 
 ### 🎯 Objective
-This example demonstrates compiling a minimal bare-metal "Hello, World!" program for RV32IMC using a memory-mapped UART output.
+This example demonstrates compiling a minimal bare-metal "Hello, Risc-V" program for RV32IMC using a memory-mapped UART output.
 
 
 ## 📁 Files
 
-### `hello.c` – Minimal Bare-Metal UART Output
-
+### `hello.c` 
 ```bash
-// hello.c
-int main() {
-    volatile char *uart = (char *)0x10000000; // Memory-mapped UART address
-    const char *msg = "Hello, World!\n";
-
-    while (*msg) {
-        *uart = *msg++; // Write each character to UART
-    }
-    return 0;
-}
-
-// Minimal _start (no C runtime)
-void _start() {
-    main();
-    while (1); // Trap CPU after main returns
-}
+  #include <stdio.h>
+  int main() {
+   printf("Hello, RISC-V!\n");
+  return 0;
+  }
 ```
-### `linker.ld` – Minimal Linker Script
 
-```bash
-/* linker.ld - Minimal linker script for RISC-V RV32IMC */
-ENTRY(_start)
-SECTIONS {
-    . = 0x80000000; /* Code starts here */
-    .text : {
-        *(.text*)
-    }
-    .data : {
-        *(.data*)
-    }
-    .bss : {
-        *(.bss*)
-        *(COMMON)
-    }
-}
-```
 ## Steps
-✅ Compile the ELF Binary
-
+✅ 🔧 Compile
 ```bash
-riscv-none-elf-gcc hello.c -o hello.elf \
-  -march=rv32imc -mabi=ilp32 \
-  -nostartfiles -nostdlib -T linker.ld
+riscv32-none-elf-gcc -o hello.elf hello.c
 ```
 ✅ Verify the Output
 Disassembly:
 ```bash
-riscv-none-elf-objdump -d hello.elf
+file hello.elf
 ```
-You should see _start and the main code logic.
-
-ELF Entry Point:
-```bash
-riscv-none-elf-readelf -h hello.elf | grep Entry
-```
+✅ Status Completed: Program successfully compiled and verified as a 32-bit RISC-V ELF.
 ## Output
-![image](https://github.com/user-attachments/assets/1ba5fa38-50f0-40f9-8eca-677ad6bbeb97)
-![image](https://github.com/user-attachments/assets/bb7fa8fe-315b-484d-b08b-772044ec6791)
-![image](https://github.com/user-attachments/assets/3ed7f57a-9a4d-48a2-8aba-59077ccf28aa)
+![image](https://github.com/user-attachments/assets/bf0d8bd4-8314-4828-aabb-abe37642cdda)
+![image](https://github.com/user-attachments/assets/ea4d2abb-0fb8-4a26-8855-6efba68183a4)
+
 
 # 03 - Assembly Generation and Prologue/Epilogue Analysis
 
