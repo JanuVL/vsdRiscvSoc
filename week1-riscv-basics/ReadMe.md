@@ -63,6 +63,7 @@ Disassembly:
 file hello.elf
 ```
 ✅ Status Completed: Program successfully compiled and verified as a 32-bit RISC-V ELF.
+
 ## Output
 ![image](https://github.com/user-attachments/assets/bf0d8bd4-8314-4828-aabb-abe37642cdda)
 ![image](https://github.com/user-attachments/assets/ea4d2abb-0fb8-4a26-8855-6efba68183a4)
@@ -248,7 +249,7 @@ This cheat-sheet helps understand how function calls interact with registers in 
 
 ## 📁 Files
 
-🔷hello1.c
+`hello1.c`
 ```bash
 int main() {
     volatile int x = 42;
@@ -257,7 +258,7 @@ int main() {
 }
 ```
 
-🔷linker.ld
+`linker.ld`
 ```bash
 OUTPUT_ARCH(riscv)
 ENTRY(main)
@@ -498,7 +499,7 @@ Current value of y: 99
 | **Dead Code**       | Retained, even if unused                        | Removed if it doesn't affect output                 | Compiler prunes code paths that have no effect.                           |
 
 🧠 Key Concepts Explained:
-🧹 Dead-Code Elimination:
+    Dead-Code Elimination:
 Removes code that does not impact final output. For example, unused variables or unreachable branches may be stripped out.
 
 🗂 Register Allocation:
@@ -734,18 +735,25 @@ SECTIONS {
 }
 ```
 ## Steps
+
 ✅ Compile:
+```bash
 riscv-none-elf-gcc -g -march=rv32im -mabi=ilp32 -nostdlib -T linker4.ld -o hello2.elf hello2.c start.s
+```
 ✅ Verify ELF:
+```bash
 riscv-none-elf-readelf -h hello2.elf
 riscv-none-elf-readelf -l hello2.elf
+```
 ✅ Run with QEMU:
+```bash
 qemu-system-riscv32 -nographic -machine virt -bios none -kernel ~/hello2.elf
+```
  ## Output
  ![image](https://github.com/user-attachments/assets/066c9f30-290f-4cf3-97af-2ddcdef5a21d)
  ![image](https://github.com/user-attachments/assets/6d65c0cd-6716-426c-97fb-4ca80e8e7f78)
  
- why Flash and SRAM addresses differ:
+ ✅ Why Flash and SRAM addresses differ:
 
  | Memory Type | Typical Use         | Volatile? | Example Address | Key Properties                      |
 |-------------|--------------------|-----------|-----------------|-------------------------------------|
@@ -972,7 +980,7 @@ S A Timer enabled .MTIP .MTIP ... (MTIP every ~1s, dots continue)
 ## Output
 ![image](https://github.com/user-attachments/assets/00979455-d241-42b1-89ac-aae059062cd5)
 
-# 13 - RV32IMAC vs RV32IMC – What’s the “A” Extension?
+# 14 - RV32IMAC vs RV32IMC – What’s the “A” Extension?
 
 The **‘A’ extension** in `rv32imac` stands for **Atomic operations**. It adds a set of instructions that enable **atomic read-modify-write memory operations**, which are crucial for implementing safe concurrency in multi-threaded or multi-core systems.
 
@@ -1192,6 +1200,45 @@ Works with QEMU using -nographic -kernel printf_uart.elf.
 
 ## Output
 ![image](https://github.com/user-attachments/assets/0ad30e63-22f5-43bd-8356-d5060942a50c)
+
+# 17 - Endianness & Struct Packing (RV32)
+
+## ✅ Objective
+
+Verify whether the RISC-V (RV32IMC) platform is little-endian using a C program that uses a union of `uint32_t` and `uint8_t[4]`.
+
+## 🧪 Method
+
+1. Define a union with:
+   - A `uint32_t` (32-bit integer)
+   - A `uint8_t[4]` byte array
+   - 
+2. Assign `0x01020304` to the integer.
+  
+3. Print each byte to check the order in memory.
+
+ ✅ Compile
+  ```bash
+   riscv-none-elf-gcc -c main.c -o main.o -march=rv32imac -mabi=ilp32 -Os
+riscv-none-elf-gcc -c startup.s -o startup.o -march=rv32imac -mabi=ilp32
+riscv-none-elf-gcc -o output.elf main.o startup.o -T linker.ld -nostdlib -nostartfiles -march=rv32imac -mabi=ilp32 -lc -lgcc
+```
+✅ Run in QEMU:
+```bash
+qemu-system-riscv32 -M virt -kernel output.elf -nographic -bios none
+```
+✅ Expected Output
+```bash
+Byte order:
+Byte 0: 0x04
+Byte 1: 0x03
+Byte 2: 0x02
+Byte 3: 0x01
+Little-Endian
+```
+## Output
+
+![image](https://github.com/user-attachments/assets/6f2d42b3-ee91-4bac-98c0-4ad2a1829fbc)
 
 
 
