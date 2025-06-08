@@ -718,8 +718,329 @@ riscv-none-elf-readelf -h gpio_toggle.elf
 ```bash
 qemu-system-riscv32 -nographic -machine virt -bios none -kernel ~/gpio_toggle.elf
 ```
+## How volatile Ensures Correct Behavior
+
+The volatile keyword tells the compiler that the value of a variable may change at any time (e.g., due to hardware or another thread), so it must not optimize away reads or writes to that variable. This is crucial for hardware registers like GPIO, as the compiler might otherwise remove or reorder accesses, leading to incorrect or unexpected behavior.
+
 ## Output
 ![image](https://github.com/user-attachments/assets/a5a881bf-53aa-42e3-8af2-84f26b44168f)
+
+# 11 - RISC-V Minimal Linker Script Project
+
+## 🎯 Objective
+
+This project demonstrates how to manually control memory layout in a bare-metal RISC-V environment using a **custom linker script**, a startup file (`start.s`), and a simple C program (`hello2.c`) that prints UART output via QEMU.
+
+## 📁 Files
+
+`linker4.ld`
+```bash
+/* Minimal linker script for hello2.elf */
+
+ENTRY(_start)
+
+MEMORY {
+  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 256K
+  SRAM  (rwx) : ORIGIN = 0x10000000, LENGTH = 64K
+}
+
+SECTIONS {
+  /* Place .text at 0x00000000 in FLASH */
+  .text 0x0 : {
+    *(.text*)
+    *(.rodata*)
+  } > FLASH
+
+  /* Place .data at 0x10000000 in SRAM */
+  .data 0x10000000 : {
+    _data_start = .;
+    *(.data*)
+    _data_end = .;
+  } > SRAM
+
+  /* Place .bss immediately after .data in SRAM */
+  .bss : {
+    _bss_start = .;
+    *(.bss*)
+    *(COMMON)
+    _bss_end = .;
+  } > SRAM
+
+  /* Set the top of the stack to end of SRAM */
+  _stack_top = ORIGIN(SRAM) + LENGTH(SRAM);
+}
+```
+## Steps
+✅ Compile:
+riscv-none-elf-gcc -g -march=rv32im -mabi=ilp32 -nostdlib -T linker4.ld -o hello2.elf hello2.c start.s
+✅ Verify ELF:
+riscv-none-elf-readelf -h hello2.elf
+riscv-none-elf-readelf -l hello2.elf
+✅ Run with QEMU:
+qemu-system-riscv32 -nographic -machine virt -bios none -kernel ~/hello2.elf
+ ## Output
+ ![image](https://github.com/user-attachments/assets/066c9f30-290f-4cf3-97af-2ddcdef5a21d)
+ ![image](https://github.com/user-attachments/assets/6d65c0cd-6716-426c-97fb-4ca80e8e7f78)
+ 
+ why Flash and SRAM addresses differ:
+
+ | Memory Type | Typical Use         | Volatile? | Example Address | Key Properties                      |
+|-------------|--------------------|-----------|-----------------|-------------------------------------|
+| Flash       | Code, constants    | No        | 0x00000000      | Non-volatile, read-only at runtime  |
+| SRAM        | Data, stack, heap  | Yes       | 0x10000000      | Volatile, fast read/write           |
+
+# 12 - Start-up Code & crt0
+
+❓ What is crt0.S?
+crt0.S is the start-up assembly code for bare-metal systems. It is the first code executed after a system reset—before main() is called.
+
+🔧 Responsibilities of crt0.S in RISC-V Bare-Metal:
+🪜 Set up the stack pointer
+
+🧹 Zero out the .bss section (uninitialized globals)
+
+📥 Copy .data from Flash to SRAM (if necessary)
+
+🔁 Call main()
+
+🔒 Enter infinite loop to prevent return from main()
+
+📌 Where to Find or Write One?
+You can:
+
+Write your own using ### `.section .text`, ### `lui`, ### `addi`, ### `la`, ### `etc`.
+
+Use examples from:
+
+newlib/libgloss
+
+Board vendor SDKs (e.g., SiFive, Kendryte)
+
+Open-source RTOSes like FreeRTOS (in portable/GCC/RISC-V/)
+
+✅ Your start.s Here Acts as crt0
+
+In this project, the start.s file acts as a minimal crt0:
+```bash
+_start:
+  lui sp, %hi(_stack_top)
+  addi sp, sp, %lo(_stack_top)
+  call main
+1: j 1b
+```
+
+# 13 - RISC-V Timer Interrupt UART Demo
+
+## 🎯 Objective
+To demonstrate a simple bare-metal RISC-V program that uses the machine timer interrupt to periodically output a message via UART on a QEMU virt platform.
+
+## 📁 Files
+
+`timer_interrupt.c`
+```bash
+#define UART0 0x10000000       // UART transmit register (QEMU virt)
+#define MTIME 0x0200bff8       // Machine timer register (QEMU virt CLINT)
+#define MTIMECMP 0x02004000    // Machine timer compare register
+
+typedef unsigned int uint32_t;
+typedef unsigned long long uint64_t;
+
+void uart_putc(char c) {
+    *(volatile char *)UART0 = c;
+}
+
+void uart_puts(const char *s) {
+    while (*s) {
+        uart_putc(*s++);
+    }
+}
+
+// Timer interrupt handler
+void timer_handler(void) {
+    uart_puts("MTIP\n");
+
+    volatile uint64_t *mtime = (volatile uint64_t *)MTIME;
+    volatile uint64_t *mtimecmp = (volatile uint64_t *)MTIMECMP;
+    *mtimecmp = *mtime + 1000000;  // Set next interrupt ~1s later
+}
+
+void enable_timer_interrupt(void) {
+    volatile uint64_t *mtime = (volatile uint64_t *)MTIME;
+    volatile uint64_t *mtimecmp = (volatile uint64_t *)MTIMECMP;
+    *mtimecmp = *mtime + 1000000;
+
+    // Enable MTIP (bit 7) in mie CSR
+    asm volatile ("li t0, 0x80");
+    asm volatile ("csrs mie, t0");
+
+    // Enable global interrupts (MIE, bit 3) in mstatus CSR
+    asm volatile ("csrs mstatus, 0x8");
+}
+
+void main() {
+    uart_puts("Timer interrupt demo\n");
+    enable_timer_interrupt();
+
+    while (1) {
+        uart_putc('.');
+        for (volatile int i = 0; i < 100000; i++);
+    }
+}
+```
+`trap_handler.s`
+```bash
+.section .text
+.global trap_handler
+.align 4
+trap_handler:
+    # Save registers
+    addi sp, sp, -64
+    sw ra, 0(sp)
+    sw t0, 4(sp)
+    sw t1, 8(sp)
+
+    # Check mcause for MTIP (0x80000007)
+    csrr t0, mcause
+    li t1, 0x80000007
+    bne t0, t1, skip
+
+    # Call C handler
+    jal timer_handler
+
+skip:
+    # Restore registers
+    lw ra, 0(sp)
+    lw t0, 4(sp)
+    lw t1, 8(sp)
+    addi sp, sp, 64
+
+    # Return
+    mret
+```
+`start.s`
+```bash
+.section .text.start
+.global _start
+_start:
+    # Initialize stack pointer
+    la sp, _stack_top
+
+    # Early UART output
+    li t0, 0x10000005
+    li t1, 0x20  # Bit 5
+wait_uart:
+    lb t2, 0(t0)
+    and t2, t2, t1
+    beq t2, zero, wait_uart
+    li t0, 0x10000000
+    li t1, 'S'   # Print 'S' to confirm entry
+    sb t1, 0(t0)
+
+    # Set trap vector
+    la t0, trap_handler
+    csrw mtvec, t0
+
+    # Jump to main
+    jal main
+    j .
+
+.section .bss
+.align 4
+.space 1024
+_stack_top:
+```
+`linker.ld`
+```bash
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY
+{
+    FLASH (rx) : ORIGIN = 0x80000000, LENGTH = 16M
+    RAM   (rw) : ORIGIN = 0x81000000, LENGTH = 16M
+}
+
+SECTIONS
+{
+    .text : {
+        *(.text.start)
+        *(.text)
+        *(.text.*)
+    } > FLASH
+
+    .rodata : ALIGN(4) {
+        *(.rodata)
+        *(.rodata.*)
+    } > FLASH
+
+    .data : ALIGN(4) {
+        *(.data)
+        *(.data.*)
+    } > RAM AT > FLASH
+
+    .bss : ALIGN(4) {
+        *(.bss)
+        *(.bss.*)
+    } > RAM
+
+    _end = .;
+}
+```
+
+## Steps
+
+✅ Compile:
+```bash
+riscv-none-elf-gcc -g -O2 -march=rv32imc_zicsr -mabi=ilp32 -nostdlib -T linker.ld -o timer.elf timer_interrupt.c trap_handler.s start.s
+```
+✅ Verify ELF:
+```bash
+riscv-none-elf-readelf -h timer.elf
+```
+✅ Run in QEMU:
+```bash
+qemu-system-riscv32 -nographic -machine virt -bios none -kernel timer.elf
+```
+✅ Expected Output:
+```bash
+S A Timer enabled .MTIP .MTIP ... (MTIP every ~1s, dots continue)
+```
+
+## Output
+![image](https://github.com/user-attachments/assets/00979455-d241-42b1-89ac-aae059062cd5)
+
+# 13 - RV32IMAC vs RV32IMC – What’s the “A” Extension?
+
+The **‘A’ extension** in `rv32imac` stands for **Atomic operations**. It adds a set of instructions that enable **atomic read-modify-write memory operations**, which are crucial for implementing safe concurrency in multi-threaded or multi-core systems.
+
+#### Key Instructions Included:
+- **`lr.w` (Load-Reserved Word):** Reads a word from memory and marks it for a possible subsequent conditional store.
+- **`sc.w` (Store-Conditional Word):** Attempts to store a word to memory only if no other write has occurred since the corresponding `lr.w`.
+- **Atomic Memory Operations (AMOs):** These perform combined read-modify-write operations atomically, such as:  
+  - `amoadd.w` (atomic add)  
+  - `amoxor.w` (atomic XOR)  
+  - `amoor.w` (atomic OR)  
+  - `amomin.w` / `amomax.w` (atomic min/max)  
+
+#### Why Is the Atomic Extension Important?
+
+- **Lock-free synchronization:** Enables building efficient lock-free data structures without disabling interrupts or using heavy locking mechanisms.
+- **Operating system support:** Essential for implementing mutexes, spinlocks, and other kernel-level synchronization primitives.
+- **Race condition prevention:** Guarantees atomicity of critical memory operations in multi-core or multi-threaded environments, avoiding inconsistent or corrupted shared data.
+
+
+In comparison, the `rv32imc` ISA subset includes the base integer (`I`), multiplication (`M`), and compressed (`C`) extensions but **does not provide atomic instructions**, so it lacks built-in support for hardware-level synchronization.
+
+The atomic instructions in `rv32imac` make it a more powerful ISA for systems requiring concurrency control.
+
+
+
+
+
+
+
+
+
 
 
 
