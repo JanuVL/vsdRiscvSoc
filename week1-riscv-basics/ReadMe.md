@@ -443,9 +443,10 @@ SECTIONS
 }
 ```
 ## Steps
-Compile:
+✅ Compile:
+```bash
 riscv-none-elf-gcc -g -march=rv32im -mabi=ilp32 -nostdlib -T linker.ld -o hello2.elf hello2.c start.s
-
+```
 ✅ Verify ELF
 ```bash
 riscv-none-elf-readelf -h hello2.elf
@@ -1032,6 +1033,210 @@ The **‘A’ extension** in `rv32imac` stands for **Atomic operations**. It add
 In comparison, the `rv32imc` ISA subset includes the base integer (`I`), multiplication (`M`), and compressed (`C`) extensions but **does not provide atomic instructions**, so it lacks built-in support for hardware-level synchronization.
 
 The atomic instructions in `rv32imac` make it a more powerful ISA for systems requiring concurrency control.
+
+# 15 – Atomic Test Program using `lr.w` / `sc.w` on RV32IMAC
+
+## 🎯 Objective
+
+To demonstrate the use of **atomic instructions (`lr.w` and `sc.w`)** on the **RV32IMAC** architecture by implementing a **spin-lock (mutex)** in C using **inline assembly**. This program simulates **two pseudo-threads** in `main()` accessing a shared counter with **mutual exclusion**.
+
+## 📁 Files
+
+`mutex1.c`
+```bash
+#define UART_TX 0x10000000    // UART transmit register (QEMU virt)
+#define UART_READY 0x10000005 // UART status register (bit 5 = TX ready)
+
+typedef unsigned int uint32_t;
+
+// Shared counter and mutex
+volatile uint32_t shared_counter = 0;
+volatile uint32_t mutex = 0; // 0 = unlocked, 1 = locked
+
+void uart_putc(char c) {
+    volatile char* uart_tx = (volatile char*)UART_TX;
+    volatile char* uart_ready = (volatile char*)UART_READY;
+    while (!(*uart_ready & (1 << 5))); // Wait until TX ready
+    *uart_tx = c;
+}
+
+void uart_puts(const char* s) {
+    while (*s) {
+        uart_putc(*s++);
+    }
+}
+
+// Integer to UART decimal print
+void uart_print_uint(uint32_t val) {
+    char buf[10];
+    int i = 0;
+    if (val == 0) {
+        uart_putc('0');
+        return;
+    }
+    while (val > 0) {
+        buf[i++] = (val % 10) + '0';
+        val /= 10;
+    }
+    while (i--) {
+        uart_putc(buf[i]);
+    }
+}
+
+// Mutex lock using lr.w/sc.w
+void mutex_lock(volatile uint32_t* lock) {
+    uint32_t tmp;
+    do {
+        asm volatile ("lr.w %0, (%1)" : "=r"(tmp) : "r"(lock));
+        if (tmp != 0) continue; // Locked, retry
+        asm volatile ("sc.w %0, %2, (%1)" : "=r"(tmp) : "r"(lock), "r"(1));
+    } while (tmp != 0);
+}
+
+// Mutex unlock
+void mutex_unlock(volatile uint32_t* lock) {
+    *lock = 0;
+}
+
+// Thread 1
+void thread1(void) {
+    mutex_lock(&mutex);
+    uart_puts("T1: Enter critical section\n");
+    shared_counter++;
+    uart_puts("T1: Counter = ");
+    uart_print_uint(shared_counter);
+    uart_putc('\n');
+    mutex_unlock(&mutex);
+    uart_puts("T1: Exit critical section\n");
+}
+
+// Thread 2
+void thread2(void) {
+    mutex_lock(&mutex);
+    uart_puts("T2: Enter critical section\n");
+    shared_counter++;
+    uart_puts("T2: Counter = ");
+    uart_print_uint(shared_counter);
+    uart_putc('\n');
+    mutex_unlock(&mutex);
+    uart_puts("T2: Exit critical section\n");
+}
+
+int main() {
+    uart_putc('A'); // Start indicator
+    uart_puts("\nStarting threads\n");
+
+    thread1();
+    thread2();
+    thread1();
+    thread2();
+
+    uart_puts("Final Counter = ");
+    uart_print_uint(shared_counter);
+    uart_putc('\n');
+
+    while (1) {
+        uart_putc('.');
+        for (volatile int i = 0; i < 100000; i++);
+    }
+
+    return 0;
+}
+```
+## Steps
+
+✅ Compile:
+```bash
+riscv-none-elf-gcc -g -O2 -march=rv32imac_zicsr -mabi=ilp32 -nostdlib -T linker.ld -o mutex1.elf mutex1.c start.s
+```
+✅ Verify ELF:
+```bash
+riscv-none-elf-readelf -h mutex1.elf
+```
+✅ Run in QEMU:
+```bash
+qemu-system-riscv32 -nographic -machine virt -bios none -kernel mutex1.elf
+```
+
+## Output
+![image](https://github.com/user-attachments/assets/ed6ad734-7de8-487a-b153-cce2addfeee2)
+![image](https://github.com/user-attachments/assets/92b194bb-5bd3-4447-b04e-e218814d8d06)
+
+# 16 – Retargeting `printf` to UART in Bare-Metal RISC-V
+
+## ✅ Objective
+
+Enable the use of `printf()` without an operating system by retargeting the `_write` system call to a memory-mapped UART interface. This allows formatted text output via `printf` to be displayed on the UART console in QEMU or real hardware.
+
+## 🔁 Output Chain Overview
+
+- **`printf()`** → formats data to a buffer  
+- **`fputc()`/`fputs()`** → used internally by `printf`  
+- **`_write()`** → sends each character to UART
+- 
+## 📌 Background
+
+In bare-metal systems, the standard C library (`newlib`) uses weak implementations of low-level I/O functions like `_write`, `_read`, and `_sbrk`. Since there is no OS, we must provide our own implementation of `_write()` to send output to UART.
+
+## 🧾 Code Summary
+
+### main.c
+
+```c
+#include <stdint.h>
+#include <unistd.h>
+#include <stdio.h>
+
+// UART registers
+volatile uint32_t *const UART_DR = (volatile uint32_t *)0x10000000;
+volatile uint32_t *const UART_SR = (volatile uint32_t *)0x10000005;
+#define UART_SR_TX_READY (1 << 5)
+
+// Retargeted _write syscall
+ssize_t _write(int file, const void *ptr, size_t len) {
+    if (file == STDOUT_FILENO || file == STDERR_FILENO) {
+        const char *buf = (const char *)ptr;
+        for (size_t i = 0; i < len; ++i) {
+            while (!(*UART_SR & UART_SR_TX_READY));
+            *UART_DR = buf[i];
+        }
+        return len;
+    }
+    return -1;
+}
+
+int main() {
+    printf("Welcome to RISC-V UART printf!\n");
+
+    int y = 99;
+    printf("Current value of y: %d\n", y);
+
+    while (1) {
+        printf(".");
+        for (volatile int i = 0; i < 100000; i++);
+    }
+    return 0;
+}
+```
+⚙️ Compilation
+```bash
+riscv-none-elf-gcc -march=rv32imac -mabi=ilp32 \
+  -T linker.ld -nostartfiles -o printf_uart.elf main.c
+```
+📎 Notes
+No OS, RTOS, or runtime required.
+
+Works with QEMU using -nographic -kernel printf_uart.elf.
+
+## Output
+![image](https://github.com/user-attachments/assets/0ad30e63-22f5-43bd-8356-d5060942a50c)
+
+
+
+
+
+
+
 
 
 
